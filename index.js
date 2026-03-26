@@ -17,7 +17,7 @@ const client = new Client({
   partials: [Partials.GuildMember]
 });
 
-client.once('ready', () => {
+client.once('clientReady', (client) => {
   console.log(`✅ ${client.user.tag} ist online!`);
 });
 
