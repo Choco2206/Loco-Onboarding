@@ -1,0 +1,13 @@
+{
+  "name": "loco-onboarding-bot",
+  "version": "1.0.0",
+  "description": "Loco Squad Onboarding Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
+  }
+}
