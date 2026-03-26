@@ -91,7 +91,8 @@ function createDefaultState() {
       payment: false
     },
     finished: false,
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
+    statusMessageId: null
   };
 }
 
@@ -157,15 +158,66 @@ function basicsDone(state) {
   );
 }
 
-async function sendLog(content) {
+async function fetchLogChannel() {
+  return await client.channels.fetch(process.env.LOG_CHANNEL_ID);
+}
+
+async function sendPersistentLog(content) {
   try {
-    const channel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
+    const channel = await fetchLogChannel();
     if (channel) {
       await channel.send({ content });
     }
   } catch (error) {
     console.error('Fehler beim Senden in den Log Channel:', error);
   }
+}
+
+async function deleteStatusLogForUser(userId) {
+  try {
+    const state = getOrCreateUserState(userId);
+
+    if (!state.statusMessageId) return;
+
+    const channel = await fetchLogChannel();
+    if (!channel) return;
+
+    try {
+      const oldMessage = await channel.messages.fetch(state.statusMessageId);
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => null);
+      }
+    } catch {
+      // alte Nachricht existiert evtl. schon nicht mehr
+    }
+
+    updateUserState(userId, (s) => {
+      s.statusMessageId = null;
+    });
+  } catch (error) {
+    console.error('Fehler beim Löschen des Status-Logs:', error);
+  }
+}
+
+async function upsertStatusLog(userId, content) {
+  try {
+    await deleteStatusLogForUser(userId);
+
+    const channel = await fetchLogChannel();
+    if (!channel) return;
+
+    const msg = await channel.send({ content });
+
+    updateUserState(userId, (s) => {
+      s.statusMessageId = msg.id;
+    });
+  } catch (error) {
+    console.error('Fehler beim Ersetzen des Status-Logs:', error);
+  }
+}
+
+async function clearStatusLogOnFinish(userId) {
+  await deleteStatusLogForUser(userId);
 }
 
 async function fetchMainGuild() {
@@ -238,7 +290,7 @@ function buildPanel() {
 
 async function ensurePanelMessage(forceRefresh = false) {
   try {
-    const channel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
+    const channel = await fetchLogChannel();
     if (!channel) return null;
 
     const messages = await channel.messages.fetch({ limit: 50 });
@@ -594,6 +646,8 @@ async function startOnboardingForUser(userId, startedById) {
     throw new Error('Mitglied nicht gefunden.');
   }
 
+  await deleteStatusLogForUser(userId);
+
   updateUserState(userId, (state) => {
     state.startedBy = startedById;
     state.currentStep = 'basics';
@@ -620,7 +674,15 @@ async function startOnboardingForUser(userId, startedById) {
   });
 
   await sendBasicsDM(member);
-  await sendLog(`✅ Onboarding manuell gestartet für <@${userId}> durch <@${startedById}>\n📍 <@${userId}> ist jetzt bei Schritt 1/6: Basics`);
+
+  await sendPersistentLog(
+    `✅ Onboarding manuell gestartet für <@${userId}> durch <@${startedById}>`
+  );
+
+  await upsertStatusLog(
+    userId,
+    `📍 <@${userId}> ist jetzt bei Schritt 1/6: Basics`
+  );
 }
 
 /* =========================================================
@@ -786,7 +848,12 @@ client.on('interactionCreate', async (interaction) => {
             s.currentStep = 'vpg';
           });
 
-          await sendLog(`🟢 <@${userId}> hat Basics abgeschlossen\n📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`);
+          await sendPersistentLog(`🟢 <@${userId}> hat Basics abgeschlossen`);
+
+          await upsertStatusLog(
+            userId,
+            `📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`
+          );
 
           const member = await fetchGuildMember(userId);
           await sendStepDM(member, 'vpg');
@@ -818,7 +885,7 @@ client.on('interactionCreate', async (interaction) => {
             flags: 64
           });
 
-          await sendLog(`🆘 <@${userId}> braucht Hilfe bei ${getStepLabel(step)}`);
+          await sendPersistentLog(`🆘 <@${userId}> braucht Hilfe bei ${getStepLabel(step)}`);
           return;
         }
 
@@ -848,16 +915,21 @@ client.on('interactionCreate', async (interaction) => {
           components: []
         });
 
-        await sendLog(`🟢 <@${userId}> hat ${step.toUpperCase()} erledigt`);
+        await sendPersistentLog(`🟢 <@${userId}> hat ${step.toUpperCase()} erledigt`);
 
         const member = await fetchGuildMember(userId);
 
         if (next === 'done') {
+          await clearStatusLogOnFinish(userId);
           await sendStepDM(member, 'done');
-          await sendLog(`🏁 <@${userId}> hat das komplette Onboarding abgeschlossen`);
+          await sendPersistentLog(`🏁 <@${userId}> hat das komplette Onboarding abgeschlossen`);
         } else {
+          await upsertStatusLog(
+            userId,
+            `📍 <@${userId}> ist jetzt bei ${getStepLabel(next)}`
+          );
+
           await sendStepDM(member, next);
-          await sendLog(`📍 <@${userId}> ist jetzt bei ${getStepLabel(next)}`);
         }
 
         return;
@@ -920,6 +992,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (mode === 'reset') {
+          await deleteStatusLogForUser(userId);
           resetUserState(userId);
 
           return interaction.update({
