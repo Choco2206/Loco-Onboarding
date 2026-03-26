@@ -168,6 +168,15 @@ async function sendLog(content) {
   }
 }
 
+async function fetchMainGuild() {
+  return await client.guilds.fetch(process.env.GUILD_ID);
+}
+
+async function fetchGuildMember(userId) {
+  const guild = await fetchMainGuild();
+  return await guild.members.fetch(userId);
+}
+
 /* =========================================================
    SLASH COMMAND AUTO REGISTER
 ========================================================= */
@@ -176,7 +185,7 @@ async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
       .setName('onboarding-panel')
-      .setDescription('Öffnet das Admin Panel für das Loco Onboarding.')
+      .setDescription('Öffnet oder erneuert das Admin Panel für das Loco Onboarding.')
       .toJSON()
   ];
 
@@ -227,6 +236,52 @@ function buildPanel() {
   };
 }
 
+async function ensurePanelMessage(forceRefresh = false) {
+  try {
+    const channel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
+    if (!channel) return null;
+
+    const messages = await channel.messages.fetch({ limit: 50 });
+
+    const existing = messages.find(
+      (msg) =>
+        msg.author.id === client.user.id &&
+        typeof msg.content === 'string' &&
+        msg.content.includes('Loco Onboarding Admin Panel')
+    );
+
+    if (existing && !forceRefresh) {
+      console.log('✅ Admin Panel existiert bereits im Log-Channel');
+      return existing;
+    }
+
+    if (existing && forceRefresh) {
+      await existing.edit(buildPanel());
+      try {
+        await existing.pin();
+      } catch (pinError) {
+        console.error('Konnte bestehendes Panel nicht anpinnen:', pinError);
+      }
+      console.log('♻️ Admin Panel im Log-Channel aktualisiert');
+      return existing;
+    }
+
+    const panelMessage = await channel.send(buildPanel());
+
+    try {
+      await panelMessage.pin();
+    } catch (pinError) {
+      console.error('Konnte Panel nicht anpinnen:', pinError);
+    }
+
+    console.log('🚀 Admin Panel neu im Log-Channel gepostet');
+    return panelMessage;
+  } catch (error) {
+    console.error('Fehler bei ensurePanelMessage:', error);
+    return null;
+  }
+}
+
 async function showSearchModal(interaction, mode) {
   const modal = new ModalBuilder()
     .setCustomId(`modal_${mode}`)
@@ -245,7 +300,7 @@ async function showSearchModal(interaction, mode) {
 }
 
 async function showPlayerPicker(interaction, mode, query = '', page = 0) {
-  const guild = interaction.guild;
+  const guild = await fetchMainGuild();
   await guild.members.fetch();
 
   const allMembers = [...guild.members.cache.values()]
@@ -532,8 +587,8 @@ async function sendStepDM(member, step) {
    ONBOARDING FLOW
 ========================================================= */
 
-async function startOnboardingForUser(guild, userId, startedById) {
-  const member = await guild.members.fetch(userId);
+async function startOnboardingForUser(userId, startedById) {
+  const member = await fetchGuildMember(userId);
 
   if (!member) {
     throw new Error('Mitglied nicht gefunden.');
@@ -575,7 +630,9 @@ async function startOnboardingForUser(guild, userId, startedById) {
 client.once('clientReady', async (readyClient) => {
   ensureProgressFile();
   console.log(`✅ ${readyClient.user.tag} ist online!`);
+
   await registerCommands();
+  await ensurePanelMessage(false);
 });
 
 /* =========================================================
@@ -600,19 +657,23 @@ client.on('interactionCreate', async (interaction) => {
           }
 
           await interaction.deferReply({ flags: 64 });
-          return interaction.editReply(buildPanel());
+          await ensurePanelMessage(true);
+
+          return interaction.editReply({
+            content: `✅ Das Onboarding Panel ist im Log-Kanal <#${process.env.LOG_CHANNEL_ID}> bereit bzw. wurde aktualisiert.`
+          });
         } catch (error) {
           console.error('Fehler bei /onboarding-panel:', error);
 
           if (interaction.deferred || interaction.replied) {
             return interaction.editReply({
-              content: '❌ Fehler beim Öffnen des Admin Panels.',
+              content: '❌ Fehler beim Öffnen oder Aktualisieren des Admin Panels.',
               components: []
             });
           }
 
           return interaction.reply({
-            content: '❌ Fehler beim Öffnen des Admin Panels.',
+            content: '❌ Fehler beim Öffnen oder Aktualisieren des Admin Panels.',
             flags: 64
           });
         }
@@ -694,45 +755,45 @@ client.on('interactionCreate', async (interaction) => {
 
       // Basics Buttons
       if (['basics_pflichttage', 'basics_discord', 'basics_team', 'basics_ready'].includes(id)) {
-  const userId = interaction.user.id;
-  const state = getOrCreateUserState(userId);
+        const userId = interaction.user.id;
+        const state = getOrCreateUserState(userId);
 
-  if (state.currentStep !== 'basics') {
-    return interaction.reply({
-      content: '❌ Dieser Schritt ist aktuell nicht aktiv.',
-      flags: 64
-    });
-  }
+        if (state.currentStep !== 'basics') {
+          return interaction.reply({
+            content: '❌ Dieser Schritt ist aktuell nicht aktiv.',
+            flags: 64
+          });
+        }
 
-  const wasAlreadyComplete = state.completed.basics;
+        const wasAlreadyComplete = state.completed.basics;
 
-  const updated = updateUserState(userId, (s) => {
-    s.completed[id] = true;
-  });
+        const updated = updateUserState(userId, (s) => {
+          s.completed[id] = true;
+        });
 
-  await interaction.update({
-    content: 'Willkommen bei **Loco Squad** 🐺🔥',
-    embeds: [buildBasicsEmbed()],
-    components: buildBasicsButtons(updated)
-  });
+        await interaction.update({
+          content: 'Willkommen bei **Loco Squad** 🐺🔥',
+          embeds: [buildBasicsEmbed()],
+          components: buildBasicsButtons(updated)
+        });
 
-  const fresh = getOrCreateUserState(userId);
-  const nowComplete = basicsDone(fresh);
+        const fresh = getOrCreateUserState(userId);
+        const nowComplete = basicsDone(fresh);
 
-  if (nowComplete && !wasAlreadyComplete) {
-    updateUserState(userId, (s) => {
-      s.completed.basics = true;
-      s.currentStep = 'vpg';
-    });
+        if (nowComplete && !wasAlreadyComplete) {
+          updateUserState(userId, (s) => {
+            s.completed.basics = true;
+            s.currentStep = 'vpg';
+          });
 
-    await sendLog(`🟢 <@${userId}> hat Basics abgeschlossen\n📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`);
+          await sendLog(`🟢 <@${userId}> hat Basics abgeschlossen\n📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`);
 
-    const member = await interaction.guild.members.fetch(userId);
-    await sendStepDM(member, 'vpg');
-  }
+          const member = await fetchGuildMember(userId);
+          await sendStepDM(member, 'vpg');
+        }
 
-  return;
-}
+        return;
+      }
 
       // Step done / help
       if (id.startsWith('done_') || id.startsWith('help_')) {
@@ -789,7 +850,7 @@ client.on('interactionCreate', async (interaction) => {
 
         await sendLog(`🟢 <@${userId}> hat ${step.toUpperCase()} erledigt`);
 
-        const member = await interaction.guild.members.fetch(userId);
+        const member = await fetchGuildMember(userId);
 
         if (next === 'done') {
           await sendStepDM(member, 'done');
@@ -841,7 +902,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (mode === 'start') {
           await interaction.deferUpdate();
-          await startOnboardingForUser(interaction.guild, userId, interaction.user.id);
+          await startOnboardingForUser(userId, interaction.user.id);
 
           return interaction.editReply({
             content: `✅ Onboarding wurde für <@${userId}> gestartet.`,
