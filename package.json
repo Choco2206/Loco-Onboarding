@@ -1,11 +1,11 @@
 {
   "name": "loco-onboarding-bot",
   "version": "2.0.0",
-  "description": "Loco Squad Onboarding Bot",
+  "description": "Loco Squad Onboarding Bot (Step-by-Step System)",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node index.js",
-    "register": "node commands/register-commands.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
