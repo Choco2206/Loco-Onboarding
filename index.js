@@ -694,48 +694,45 @@ client.on('interactionCreate', async (interaction) => {
 
       // Basics Buttons
       if (['basics_pflichttage', 'basics_discord', 'basics_team', 'basics_ready'].includes(id)) {
-        const userId = interaction.user.id;
-        const state = getOrCreateUserState(userId);
+  const userId = interaction.user.id;
+  const state = getOrCreateUserState(userId);
 
-        if (state.currentStep !== 'basics') {
-          return interaction.reply({
-            content: '❌ Dieser Schritt ist aktuell nicht aktiv.',
-            flags: 64
-          });
-        }
+  if (state.currentStep !== 'basics') {
+    return interaction.reply({
+      content: '❌ Dieser Schritt ist aktuell nicht aktiv.',
+      flags: 64
+    });
+  }
 
-        const updated = updateUserState(userId, (s) => {
-          s.completed[id] = true;
-          s.completed.basics = (
-            s.completed.basics_pflichttage &&
-            s.completed.basics_discord &&
-            s.completed.basics_team &&
-            s.completed.basics_ready
-          );
-        });
+  const wasAlreadyComplete = state.completed.basics;
 
-        await interaction.update({
-          content: 'Willkommen bei **Loco Squad** 🐺🔥',
-          embeds: [buildBasicsEmbed()],
-          components: buildBasicsButtons(updated)
-        });
+  const updated = updateUserState(userId, (s) => {
+    s.completed[id] = true;
+  });
 
-        const fresh = getOrCreateUserState(userId);
+  await interaction.update({
+    content: 'Willkommen bei **Loco Squad** 🐺🔥',
+    embeds: [buildBasicsEmbed()],
+    components: buildBasicsButtons(updated)
+  });
 
-        if (basicsDone(fresh) && !fresh.completed.basics) {
-          updateUserState(userId, (s) => {
-            s.completed.basics = true;
-            s.currentStep = 'vpg';
-          });
+  const fresh = getOrCreateUserState(userId);
+  const nowComplete = basicsDone(fresh);
 
-          await sendLog(`🟢 <@${userId}> hat Basics abgeschlossen\n📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`);
+  if (nowComplete && !wasAlreadyComplete) {
+    updateUserState(userId, (s) => {
+      s.completed.basics = true;
+      s.currentStep = 'vpg';
+    });
 
-          const member = await interaction.guild.members.fetch(userId);
-          await sendStepDM(member, 'vpg');
-        }
+    await sendLog(`🟢 <@${userId}> hat Basics abgeschlossen\n📍 <@${userId}> ist jetzt bei Schritt 2/6: VPG`);
 
-        return;
-      }
+    const member = await interaction.guild.members.fetch(userId);
+    await sendStepDM(member, 'vpg');
+  }
+
+  return;
+}
 
       // Step done / help
       if (id.startsWith('done_') || id.startsWith('help_')) {
