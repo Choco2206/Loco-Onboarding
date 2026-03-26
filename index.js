@@ -6,7 +6,10 @@ const {
   Client,
   GatewayIntentBits,
   Partials,
+  REST,
+  Routes,
   SlashCommandBuilder,
+  PermissionsBitField,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -15,7 +18,6 @@ const {
   TextInputBuilder,
   TextInputStyle,
   EmbedBuilder,
-  PermissionsBitField,
 } = require('discord.js');
 
 const client = new Client({
@@ -29,9 +31,17 @@ const client = new Client({
 const PROGRESS_FILE = path.join(__dirname, 'data', 'onboarding-progress.json');
 const PAGE_SIZE = 25;
 
+/* =========================================================
+   BASIC HELPERS
+========================================================= */
+
 function ensureProgressFile() {
   const dir = path.dirname(PROGRESS_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
   if (!fs.existsSync(PROGRESS_FILE)) {
     fs.writeFileSync(PROGRESS_FILE, JSON.stringify({}, null, 2), 'utf8');
   }
@@ -39,47 +49,57 @@ function ensureProgressFile() {
 
 function loadProgress() {
   ensureProgressFile();
+
   try {
-    return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8') || '{}');
-  } catch (e) {
-    console.error('Fehler beim Laden der Progress-Datei:', e);
+    const raw = fs.readFileSync(PROGRESS_FILE, 'utf8');
+    return JSON.parse(raw || '{}');
+  } catch (error) {
+    console.error('Fehler beim Laden der Progress-Datei:', error);
     return {};
   }
 }
 
 function saveProgress(data) {
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2), 'utf8');
+  try {
+    fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Fehler beim Speichern der Progress-Datei:', error);
+  }
+}
+
+function createDefaultState() {
+  return {
+    startedBy: null,
+    currentStep: 'none',
+    completed: {
+      basics_pflichttage: false,
+      basics_discord: false,
+      basics_team: false,
+      basics_ready: false,
+      basics: false,
+      vpg: false,
+      pl: false,
+      rpl: false,
+      pla: false,
+      payment: false
+    },
+    needsHelp: {
+      vpg: false,
+      pl: false,
+      rpl: false,
+      pla: false,
+      payment: false
+    },
+    finished: false,
+    lastUpdatedAt: null
+  };
 }
 
 function getOrCreateUserState(userId) {
   const data = loadProgress();
 
   if (!data[userId]) {
-    data[userId] = {
-      startedBy: null,
-      currentStep: 'none',
-      completed: {
-        basics_pflichttage: false,
-        basics_discord: false,
-        basics_team: false,
-        basics_ready: false,
-        basics: false,
-        vpg: false,
-        pl: false,
-        rpl: false,
-        pla: false,
-        payment: false
-      },
-      needsHelp: {
-        vpg: false,
-        pl: false,
-        rpl: false,
-        pla: false,
-        payment: false
-      },
-      finished: false,
-      lastUpdatedAt: null
-    };
+    data[userId] = createDefaultState();
     saveProgress(data);
   }
 
@@ -88,38 +108,15 @@ function getOrCreateUserState(userId) {
 
 function updateUserState(userId, updater) {
   const data = loadProgress();
+
   if (!data[userId]) {
-    data[userId] = {
-      startedBy: null,
-      currentStep: 'none',
-      completed: {
-        basics_pflichttage: false,
-        basics_discord: false,
-        basics_team: false,
-        basics_ready: false,
-        basics: false,
-        vpg: false,
-        pl: false,
-        rpl: false,
-        pla: false,
-        payment: false
-      },
-      needsHelp: {
-        vpg: false,
-        pl: false,
-        rpl: false,
-        pla: false,
-        payment: false
-      },
-      finished: false,
-      lastUpdatedAt: null
-    };
+    data[userId] = createDefaultState();
   }
 
   updater(data[userId]);
   data[userId].lastUpdatedAt = new Date().toISOString();
-  saveProgress(data);
 
+  saveProgress(data);
   return data[userId];
 }
 
@@ -127,6 +124,13 @@ function resetUserState(userId) {
   const data = loadProgress();
   delete data[userId];
   saveProgress(data);
+}
+
+function isStaff(interaction) {
+  return (
+    interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)
+  );
 }
 
 function getStepLabel(step) {
@@ -140,22 +144,59 @@ function getStepLabel(step) {
     payment: 'Schritt 6/6: Jahresbeitrag',
     done: 'Abgeschlossen'
   };
+
   return map[step] || step;
 }
 
-async function sendLog(message) {
+function basicsDone(state) {
+  return (
+    state.completed.basics_pflichttage &&
+    state.completed.basics_discord &&
+    state.completed.basics_team &&
+    state.completed.basics_ready
+  );
+}
+
+async function sendLog(content) {
   try {
     const channel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
-    if (channel) await channel.send({ content: message });
-  } catch (e) {
-    console.error('Fehler beim Loggen:', e);
+    if (channel) {
+      await channel.send({ content });
+    }
+  } catch (error) {
+    console.error('Fehler beim Senden in den Log Channel:', error);
   }
 }
 
-function isStaff(interaction) {
-  return interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)
-    || interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator);
+/* =========================================================
+   SLASH COMMAND AUTO REGISTER
+========================================================= */
+
+async function registerCommands() {
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('onboarding-panel')
+      .setDescription('Öffnet das Admin Panel für das Loco Onboarding.')
+      .toJSON()
+  ];
+
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+      { body: commands }
+    );
+
+    console.log('✅ Slash Commands registriert');
+  } catch (error) {
+    console.error('Fehler beim Registrieren der Slash Commands:', error);
+  }
 }
+
+/* =========================================================
+   ADMIN PANEL
+========================================================= */
 
 function buildPanel() {
   const row = new ActionRowBuilder().addComponents(
@@ -186,6 +227,123 @@ function buildPanel() {
   };
 }
 
+async function showSearchModal(interaction, mode) {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_${mode}`)
+    .setTitle('Spieler suchen');
+
+  const input = new TextInputBuilder()
+    .setCustomId('search_query')
+    .setLabel('Name, Username oder ID')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setPlaceholder('Leer lassen = alle Loco Spieler');
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+
+  await interaction.showModal(modal);
+}
+
+async function showPlayerPicker(interaction, mode, query = '', page = 0) {
+  const guild = interaction.guild;
+  await guild.members.fetch();
+
+  const allMembers = [...guild.members.cache.values()]
+    .filter(member => !member.user.bot && member.roles.cache.has(process.env.LOCO_ROLE_ID))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
+
+  const q = query.trim().toLowerCase();
+
+  const filtered = q
+    ? allMembers.filter(member =>
+        member.displayName.toLowerCase().includes(q) ||
+        member.user.username.toLowerCase().includes(q) ||
+        member.id.includes(q)
+      )
+    : allMembers;
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+
+  const start = safePage * PAGE_SIZE;
+  const items = filtered.slice(start, start + PAGE_SIZE);
+
+  if (!items.length) {
+    const content = `❌ Keine Spieler gefunden für Suchbegriff: **${query || 'leer'}**`;
+
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply({ content, components: [] });
+    }
+
+    return interaction.reply({ content, flags: 64 });
+  }
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`pick_${mode}|${encodeURIComponent(query)}|${safePage}`)
+    .setPlaceholder(`Spieler auswählen (${items.length} auf dieser Seite)`)
+    .addOptions(
+      items.map(member => ({
+        label: member.displayName.slice(0, 100),
+        description: `@${member.user.username}`.slice(0, 100),
+        value: member.id
+      }))
+    );
+
+  const selectRow = new ActionRowBuilder().addComponents(select);
+
+  const navRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`page_${mode}|${encodeURIComponent(query)}|${safePage - 1}`)
+      .setLabel('◀️ Zurück')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage === 0),
+
+    new ButtonBuilder()
+      .setCustomId(`page_${mode}|${encodeURIComponent(query)}|${safePage + 1}`)
+      .setLabel('▶️ Weiter')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage >= totalPages - 1)
+  );
+
+  const content =
+    `**Modus:** ${mode}\n` +
+    `**Suchbegriff:** ${query || '—'}\n` +
+    `**Seite:** ${safePage + 1}/${totalPages}\n` +
+    `Es werden nur Mitglieder mit der **Loco Squad** Rolle angezeigt.`;
+
+  if (interaction.deferred || interaction.replied) {
+    return interaction.editReply({
+      content,
+      components: [selectRow, navRow]
+    });
+  }
+
+  return interaction.reply({
+    content,
+    components: [selectRow, navRow],
+    flags: 64
+  });
+}
+
+function buildStatusText(userId, state) {
+  return [
+    `**User:** <@${userId}>`,
+    `**Aktueller Schritt:** ${getStepLabel(state.currentStep)}`,
+    `**Basics:** ${state.completed.basics ? '✅' : '⬜'}`,
+    `**VPG:** ${state.completed.vpg ? '✅' : '⬜'} ${state.needsHelp.vpg ? '🆘' : ''}`,
+    `**PL:** ${state.completed.pl ? '✅' : '⬜'} ${state.needsHelp.pl ? '🆘' : ''}`,
+    `**RPL:** ${state.completed.rpl ? '✅' : '⬜'} ${state.needsHelp.rpl ? '🆘' : ''}`,
+    `**PLA:** ${state.completed.pla ? '✅' : '⬜'} ${state.needsHelp.pla ? '🆘' : ''}`,
+    `**Jahresbeitrag:** ${state.completed.payment ? '✅' : '⬜'} ${state.needsHelp.payment ? '🆘' : ''}`,
+    `**Abgeschlossen:** ${state.finished ? '✅' : '⬜'}`,
+    `**Zuletzt aktualisiert:** ${state.lastUpdatedAt || '—'}`
+  ].join('\n');
+}
+
+/* =========================================================
+   DM CONTENT
+========================================================= */
+
 function buildBasicsEmbed() {
   return new EmbedBuilder()
     .setTitle('Willkommen bei Loco Squad 🐺🔥')
@@ -200,7 +358,7 @@ function buildBasicsEmbed() {
           'Unsere festen Tage sind **Montag, Donnerstag und Sonntag**.\n' +
           'Privatleben geht immer vor. Schichtarbeit, Urlaub, Familie, Geburtstag und sowas ist alles verständlich.\n' +
           'Wenn du wirklich Teil von Loco Squad sein willst, solltest du **mindestens 2 Pflichttage regelmäßig können** und idealerweise auch ab und zu bei Cups oder Levelrunden dabei sein.\n' +
-          'Ein Platz im Kader ist wertvoll.'
+          'Ein Platz im Kader ist wertvoll, deswegen bringt es nichts, wenn man nur alle 2 Wochen mal auftaucht.'
       },
       {
         name: '📲 Discord-Aktivität',
@@ -231,7 +389,7 @@ function buildBasicsButtons(state) {
         .setCustomId('basics_discord')
         .setLabel('📲 Discord-Aktivität verstanden')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(state.completed.basics_discord),
+        .setDisabled(state.completed.basics_discord)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -244,16 +402,9 @@ function buildBasicsButtons(state) {
         .setCustomId('basics_ready')
         .setLabel('✅ Ich bin ready')
         .setStyle(ButtonStyle.Success)
-        .setDisabled(state.completed.basics_ready),
+        .setDisabled(state.completed.basics_ready)
     )
   ];
-}
-
-function basicsDone(state) {
-  return state.completed.basics_pflichttage
-    && state.completed.basics_discord
-    && state.completed.basics_team
-    && state.completed.basics_ready;
 }
 
 function buildStepEmbed(step) {
@@ -318,7 +469,7 @@ function buildStepEmbed(step) {
         '• PayPal: **locosquadfc**\n' +
         '• Zweck: **Ligagebühren, Cups, Botkosten und allgemeine Teamkosten**\n\n' +
         '**Verwendungszweck:**\n' +
-        'Bitte am besten deinen **Namen oder deine ID + Jahresbeitrag** dazuschreiben.\n\n' +
+        'Bitte am besten deinen **Namen oder deine ID + Jahresbeitrag** dazuschreiben, damit man es sauber zuordnen kann.\n\n' +
         'Wenn du den Beitrag gesendet hast, bestätige es unten oder klick auf Hilfe nötig.'
       ),
 
@@ -336,7 +487,9 @@ function buildStepEmbed(step) {
 }
 
 function buildStepButtons(step) {
-  if (step === 'done') return [];
+  if (step === 'done') {
+    return [];
+  }
 
   return [
     new ActionRowBuilder().addComponents(
@@ -353,8 +506,13 @@ function buildStepButtons(step) {
   ];
 }
 
+/* =========================================================
+   DM SENDERS
+========================================================= */
+
 async function sendBasicsDM(member) {
   const state = getOrCreateUserState(member.id);
+
   await member.send({
     content: 'Willkommen bei **Loco Squad** 🐺🔥',
     embeds: [buildBasicsEmbed()],
@@ -370,24 +528,16 @@ async function sendStepDM(member, step) {
   });
 }
 
-function buildStatusText(userId, state) {
-  return [
-    `**User:** <@${userId}>`,
-    `**Aktueller Schritt:** ${getStepLabel(state.currentStep)}`,
-    `**Basics:** ${state.completed.basics ? '✅' : '⬜'}`,
-    `**VPG:** ${state.completed.vpg ? '✅' : '⬜'} ${state.needsHelp.vpg ? '🆘' : ''}`,
-    `**PL:** ${state.completed.pl ? '✅' : '⬜'} ${state.needsHelp.pl ? '🆘' : ''}`,
-    `**RPL:** ${state.completed.rpl ? '✅' : '⬜'} ${state.needsHelp.rpl ? '🆘' : ''}`,
-    `**PLA:** ${state.completed.pla ? '✅' : '⬜'} ${state.needsHelp.pla ? '🆘' : ''}`,
-    `**Jahresbeitrag:** ${state.completed.payment ? '✅' : '⬜'} ${state.needsHelp.payment ? '🆘' : ''}`,
-    `**Abgeschlossen:** ${state.finished ? '✅' : '⬜'}`,
-    `**Zuletzt aktualisiert:** ${state.lastUpdatedAt || '—'}`
-  ].join('\n');
-}
+/* =========================================================
+   ONBOARDING FLOW
+========================================================= */
 
 async function startOnboardingForUser(guild, userId, startedById) {
   const member = await guild.members.fetch(userId);
-  if (!member) throw new Error('Mitglied nicht gefunden.');
+
+  if (!member) {
+    throw new Error('Mitglied nicht gefunden.');
+  }
 
   updateUserState(userId, (state) => {
     state.startedBy = startedById;
@@ -418,119 +568,70 @@ async function startOnboardingForUser(guild, userId, startedById) {
   await sendLog(`✅ Onboarding manuell gestartet für <@${userId}> durch <@${startedById}>\n📍 <@${userId}> ist jetzt bei Schritt 1/6: Basics`);
 }
 
-async function showPlayerPicker(interaction, mode, query = '', page = 0) {
-  const guild = interaction.guild;
-  await guild.members.fetch();
+/* =========================================================
+   READY
+========================================================= */
 
-  const allMembers = guild.members.cache
-    .filter(m => !m.user.bot && m.roles.cache.has(process.env.LOCO_ROLE_ID))
-    .sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
-
-  const q = query.trim().toLowerCase();
-
-  const filtered = q
-    ? allMembers.filter(m =>
-        m.displayName.toLowerCase().includes(q) ||
-        m.user.username.toLowerCase().includes(q) ||
-        m.id.includes(q)
-      )
-    : allMembers;
-
-  const totalPages = Math.max(1, Math.ceil(filtered.size / PAGE_SIZE));
-  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
-
-  const items = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
-
-  if (!items.length) {
-    const content = `Keine Spieler gefunden für Suchbegriff: **${query || 'leer'}**`;
-    if (interaction.deferred || interaction.replied) {
-      return interaction.editReply({ content, components: [] });
-    }
-    return interaction.reply({ content, flags: 64 });
-  }
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`pick_${mode}|${encodeURIComponent(query)}|${safePage}`)
-    .setPlaceholder(`Spieler auswählen (${items.length} auf dieser Seite)`)
-    .addOptions(
-      items.map(member => ({
-        label: member.displayName.slice(0, 100),
-        description: `@${member.user.username}`.slice(0, 100),
-        value: member.id
-      }))
-    );
-
-  const navRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`page_${mode}|${encodeURIComponent(query)}|${safePage - 1}`)
-      .setLabel('◀️ Zurück')
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(safePage === 0),
-
-    new ButtonBuilder()
-      .setCustomId(`page_${mode}|${encodeURIComponent(query)}|${safePage + 1}`)
-      .setLabel('▶️ Weiter')
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(safePage >= totalPages - 1)
-  );
-
-  const selectRow = new ActionRowBuilder().addComponents(select);
-
-  const content =
-    `**Modus:** ${mode}\n` +
-    `**Suchbegriff:** ${query || '—'}\n` +
-    `**Seite:** ${safePage + 1}/${totalPages}\n` +
-    `Es werden nur Mitglieder mit der **Loco Squad** Rolle angezeigt.`;
-
-  if (interaction.deferred || interaction.replied) {
-    return interaction.editReply({ content, components: [selectRow, navRow] });
-  }
-
-  return interaction.reply({ content, components: [selectRow, navRow], flags: 64 });
-}
-
-async function showSearchModal(interaction, mode) {
-  const modal = new ModalBuilder()
-    .setCustomId(`modal_${mode}`)
-    .setTitle('Spieler suchen');
-
-  const input = new TextInputBuilder()
-    .setCustomId('search_query')
-    .setLabel('Name, Username oder ID')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(false)
-    .setPlaceholder('Leer lassen = alle Loco Spieler');
-
-  modal.addComponents(new ActionRowBuilder().addComponents(input));
-  await interaction.showModal(modal);
-}
-
-client.once('clientReady', (c) => {
+client.once('clientReady', async (readyClient) => {
   ensureProgressFile();
-  console.log(`✅ ${c.user.tag} ist online!`);
+  console.log(`✅ ${readyClient.user.tag} ist online!`);
+  await registerCommands();
 });
+
+/* =========================================================
+   INTERACTIONS
+========================================================= */
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    console.log('Interaction rein:', interaction.type, interaction.customId || interaction.commandName);
+
+    /* -------------------------
+       SLASH COMMANDS
+    ------------------------- */
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'onboarding-panel') {
-        if (!isStaff(interaction)) {
-          return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
-        }
+        try {
+          if (!isStaff(interaction)) {
+            return interaction.reply({
+              content: '❌ Keine Berechtigung.',
+              flags: 64
+            });
+          }
 
-        return interaction.reply({
-          ...buildPanel(),
-          flags: 64
-        });
+          await interaction.deferReply({ flags: 64 });
+          return interaction.editReply(buildPanel());
+        } catch (error) {
+          console.error('Fehler bei /onboarding-panel:', error);
+
+          if (interaction.deferred || interaction.replied) {
+            return interaction.editReply({
+              content: '❌ Fehler beim Öffnen des Admin Panels.',
+              components: []
+            });
+          }
+
+          return interaction.reply({
+            content: '❌ Fehler beim Öffnen des Admin Panels.',
+            flags: 64
+          });
+        }
       }
     }
 
+    /* -------------------------
+       BUTTONS
+    ------------------------- */
     if (interaction.isButton()) {
       const id = interaction.customId;
 
+      // Panel Buttons
       if (['panel_start', 'panel_status', 'panel_reset'].includes(id)) {
         if (!isStaff(interaction)) {
-          return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
+          return interaction.reply({
+            content: '❌ Keine Berechtigung.',
+            flags: 64
+          });
         }
 
         const mode = id.replace('panel_', '');
@@ -539,10 +640,14 @@ client.on('interactionCreate', async (interaction) => {
 
       if (id === 'panel_help_cases') {
         if (!isStaff(interaction)) {
-          return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
+          return interaction.reply({
+            content: '❌ Keine Berechtigung.',
+            flags: 64
+          });
         }
 
         const data = loadProgress();
+
         const helpUsers = Object.entries(data).filter(([, state]) =>
           Object.values(state.needsHelp || {}).some(Boolean)
         );
@@ -556,9 +661,10 @@ client.on('interactionCreate', async (interaction) => {
 
         const text = helpUsers.map(([userId, state]) => {
           const helpSteps = Object.entries(state.needsHelp)
-            .filter(([, val]) => val)
+            .filter(([, value]) => value)
             .map(([key]) => key.toUpperCase())
             .join(', ');
+
           return `🆘 <@${userId}> braucht Hilfe bei: **${helpSteps}**`;
         }).join('\n');
 
@@ -568,12 +674,16 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
+      // Pagination Buttons
       if (id.startsWith('page_')) {
         if (!isStaff(interaction)) {
-          return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
+          return interaction.reply({
+            content: '❌ Keine Berechtigung.',
+            flags: 64
+          });
         }
 
-        const [, payload] = id.split('page_');
+        const payload = id.replace('page_', '');
         const [mode, encQuery, pageStr] = payload.split('|');
         const page = Number(pageStr) || 0;
         const query = decodeURIComponent(encQuery || '');
@@ -596,12 +706,12 @@ client.on('interactionCreate', async (interaction) => {
 
         const updated = updateUserState(userId, (s) => {
           s.completed[id] = true;
-          s.completed.basics = basicsDone({
-            completed: {
-              ...s.completed,
-              [id]: true
-            }
-          });
+          s.completed.basics = (
+            s.completed.basics_pflichttage &&
+            s.completed.basics_discord &&
+            s.completed.basics_team &&
+            s.completed.basics_ready
+          );
         });
 
         await interaction.update({
@@ -611,6 +721,7 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         const fresh = getOrCreateUserState(userId);
+
         if (basicsDone(fresh) && !fresh.completed.basics) {
           updateUserState(userId, (s) => {
             s.completed.basics = true;
@@ -667,7 +778,10 @@ client.on('interactionCreate', async (interaction) => {
           s.completed[step] = true;
           s.needsHelp[step] = false;
           s.currentStep = next;
-          if (next === 'done') s.finished = true;
+
+          if (next === 'done') {
+            s.finished = true;
+          }
         });
 
         await interaction.update({
@@ -692,9 +806,15 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
+    /* -------------------------
+       MODALS
+    ------------------------- */
     if (interaction.isModalSubmit()) {
       if (!isStaff(interaction)) {
-        return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
+        return interaction.reply({
+          content: '❌ Keine Berechtigung.',
+          flags: 64
+        });
       }
 
       if (interaction.customId.startsWith('modal_')) {
@@ -706,19 +826,26 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
+    /* -------------------------
+       STRING SELECT MENUS
+    ------------------------- */
     if (interaction.isStringSelectMenu()) {
       if (!isStaff(interaction)) {
-        return interaction.reply({ content: '❌ Keine Berechtigung.', flags: 64 });
+        return interaction.reply({
+          content: '❌ Keine Berechtigung.',
+          flags: 64
+        });
       }
 
       if (interaction.customId.startsWith('pick_')) {
-        const [, payload] = interaction.customId.split('pick_');
+        const payload = interaction.customId.replace('pick_', '');
         const [mode] = payload.split('|');
         const userId = interaction.values[0];
 
         if (mode === 'start') {
           await interaction.deferUpdate();
           await startOnboardingForUser(interaction.guild, userId, interaction.user.id);
+
           return interaction.editReply({
             content: `✅ Onboarding wurde für <@${userId}> gestartet.`,
             components: []
@@ -727,6 +854,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (mode === 'status') {
           const state = getOrCreateUserState(userId);
+
           return interaction.update({
             content: `## Status\n${buildStatusText(userId, state)}`,
             components: []
@@ -735,6 +863,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (mode === 'reset') {
           resetUserState(userId);
+
           return interaction.update({
             content: `🔁 Onboarding-Status von <@${userId}> wurde zurückgesetzt.`,
             components: []
@@ -752,7 +881,9 @@ client.on('interactionCreate', async (interaction) => {
           flags: 64
         });
       }
-    } catch {}
+    } catch (replyError) {
+      console.error('Fehler beim Error-Reply:', replyError);
+    }
   }
 });
 
