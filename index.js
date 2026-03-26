@@ -9,7 +9,8 @@ const {
   Partials,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  EmbedBuilder
 } = require('discord.js');
 
 const client = new Client({
@@ -127,7 +128,6 @@ function buildProgressText(userProgress) {
   const done = (value) => (value ? '✅' : '⬜');
 
   return [
-    '**Dein aktueller Onboarding-Status:**',
     `${done(userProgress.beitrag)} Jahresbeitrag verstanden`,
     `${done(userProgress.pflichttage)} Pflichttage verstanden`,
     `${done(userProgress.discord)} Discord-Aktivität verstanden`,
@@ -135,89 +135,60 @@ function buildProgressText(userProgress) {
   ].join('\n');
 }
 
-function buildOnboardingMessage(userProgress) {
-  return `
-Willkommen bei **Loco Squad** 🐺🔥
-
-Geil, dass du jetzt Teil vom Team bist. Ab jetzt geht’s nicht nur ums Zocken, sondern darum, gemeinsam was aufzubauen und besser zu werden.
-
----
-
-**💸 Jahresbeitrag**  
-Bei uns gibt es einen Jahresbeitrag von **12 €**.  
-Der wird für Dinge wie **Ligagebühren, Cups, Botkosten und allgemeine Teamkosten** genutzt.  
-
-Bitte per PayPal an **locosquadfc** schicken.
-
----
-
-**📅 Pflichttage**  
-Montag, Donnerstag und Sonntag sind unsere festen Tage.
-
-Klar: Privat geht immer vor. Schichtarbeit, Urlaub, Family, Geburtstag und sowas ist alles easy, vollstes Verständnis.  
-Aber wenn du wirklich Teil von Loco sein willst, solltest du **mindestens 2 Pflichttage regelmäßig können** und idealerweise auch **1–2 Mal bei Cups oder Levelrunden** dabei sein.
-
-Jeder Platz im Kader ist wertvoll. Es bringt nichts, wenn man nur 1 Mal in 2 Wochen auftaucht.
-
----
-
-**📲 Discord-Aktivität**  
-Bitte regelmäßig auf den Server schauen:  
-• Umfragen beantworten  
-• rechtzeitig absagen, wenn du nicht kannst  
-• Ankündigungen lesen  
-
-Planung funktioniert nur, wenn jeder mitzieht.
-
----
-
-**🤝 Teamgedanke**  
-Bei uns zählt das Team.  
-Kein Ego-Film, kein Drama.  
-Wichtig sind **Respekt, Zuverlässigkeit und Zusammenhalt**.
-
----
-
-**📝 Anmeldung & Registrierung**
-
-**VPG**  
-https://virtualprogaming.com  
-→ Registrieren und deinem VM von Loco Squad den Benutzernamen schicken
-
----
-
-**PL**  
-Kurzfassung:  
-• Account erstellen: https://my.proleague.de/de/account/login  
-• Spieler erstellen  
-• Transferanfrage an **Loco Squad** senden  
-• Ingame dem Club beitreten  
-• GameID einstellen  
-• Alias korrekt setzen  
-
----
-
-**PLA**  
-→ Deine **PSN-ID / Xbox-ID / EA-ID** und deine **Trikotnummer** dem VM von Loco Squad schicken
-
----
-
-**RPL**  
-Kurzfassung:  
-• https://ifl-gaming.com/login/  
-• Spieler erstellen  
-• Team: **Loco Squad**  
-• Liga: **RPL**  
-• Season: **RPL2 – Season 3**  
-• Danach dem VM deine ID oder einen Screenshot schicken  
-
----
-
-${buildProgressText(userProgress)}
-
-Wenn du Fragen hast, meld dich einfach.  
-Willkommen bei Loco 🤝🔥
-`;
+function buildOnboardingEmbed(userProgress) {
+  return new EmbedBuilder()
+    .setTitle('🐺 Loco Onboarding')
+    .setDescription('Geil, dass du jetzt Teil von **Loco Squad** bist. Hier kommen die wichtigsten Infos für deinen Start.')
+    .addFields(
+      {
+        name: '💸 Jahresbeitrag',
+        value:
+          'Bei uns gibt es einen Jahresbeitrag von **12 €**.\n' +
+          'Der wird für **Ligagebühren, Cups, Botkosten und allgemeine Teamkosten** genutzt.\n\n' +
+          'Bitte per PayPal an **locosquadfc** schicken.'
+      },
+      {
+        name: '📅 Pflichttage',
+        value:
+          '**Montag, Donnerstag und Sonntag** sind unsere festen Tage.\n\n' +
+          'Privat geht immer vor. Schichtarbeit, Urlaub, Family oder Geburtstag ist alles verständlich.\n' +
+          'Wenn du wirklich Teil von Loco sein willst, solltest du aber **mindestens 2 Pflichttage regelmäßig können** und idealerweise auch **1–2 Mal bei Cups oder Levelrunden** dabei sein.\n\n' +
+          'Jeder Platz im Kader ist wertvoll.'
+      },
+      {
+        name: '📲 Discord-Aktivität',
+        value:
+          '• Umfragen beantworten\n' +
+          '• rechtzeitig absagen\n' +
+          '• Ankündigungen lesen\n\n' +
+          'Planung funktioniert nur, wenn jeder mitzieht.'
+      },
+      {
+        name: '🤝 Teamgedanke',
+        value:
+          'Kein Ego-Film, kein Drama.\n' +
+          'Wichtig sind **Respekt, Zuverlässigkeit und Zusammenhalt**.'
+      },
+      {
+        name: '📝 Anmeldung & Registrierung',
+        value:
+          '**VPG**\n' +
+          'https://virtualprogaming.com\n' +
+          '→ Registrieren und dem VM den Benutzernamen schicken\n\n' +
+          '**PL**\n' +
+          'https://my.proleague.de/de/account/login\n' +
+          '→ Account erstellen, Spieler erstellen, Transferanfrage an **Loco Squad**, Ingame dem Club beitreten, GameID einstellen, Alias korrekt setzen\n\n' +
+          '**PLA**\n' +
+          '→ Deine **PSN-ID / Xbox-ID / EA-ID** und **Trikotnummer** dem VM schicken\n\n' +
+          '**RPL**\n' +
+          'https://ifl-gaming.com/login/\n' +
+          '→ Spieler erstellen, Team **Loco Squad**, Liga **RPL**, Season **RPL2 – Season 3**, danach VM ID oder Screenshot schicken'
+      },
+      {
+        name: '📊 Dein aktueller Onboarding-Status',
+        value: buildProgressText(userProgress)
+      }
+    );
 }
 
 client.once('clientReady', (client) => {
@@ -234,17 +205,17 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 
     if (!hadRoleBefore && hasRoleNow) {
       const userProgress = getUserProgress(newMember.id);
-      const components = buildButtons(userProgress);
-      const message = buildOnboardingMessage(userProgress);
 
       let dmSuccess = true;
 
       try {
         await newMember.send({
-          content: message,
-          components
+          content: 'Willkommen bei **Loco Squad** 🐺🔥',
+          embeds: [buildOnboardingEmbed(userProgress)],
+          components: buildButtons(userProgress)
         });
       } catch (err) {
+        console.error('Fehler beim Senden der DM:', err);
         dmSuccess = false;
       }
 
@@ -254,7 +225,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         await logChannel.send({
           content: dmSuccess
             ? `✅ Onboarding DM gesendet an <@${newMember.id}>`
-            : `❌ Konnte keine DM senden an <@${newMember.id}> (DMs aus)`
+            : `❌ Konnte keine DM senden an <@${newMember.id}> (DMs aus oder anderer Fehler)`
         });
       }
     }
@@ -284,7 +255,7 @@ client.on('interactionCreate', async (interaction) => {
     if (currentProgress[key]) {
       await interaction.reply({
         content: `✅ Diesen Punkt hast du bereits bestätigt: **${label}**`,
-        ephemeral: true
+        flags: 64
       });
       return;
     }
@@ -294,13 +265,14 @@ client.on('interactionCreate', async (interaction) => {
     const total = 4;
 
     await interaction.update({
-      content: buildOnboardingMessage(updatedProgress),
+      content: 'Willkommen bei **Loco Squad** 🐺🔥',
+      embeds: [buildOnboardingEmbed(updatedProgress)],
       components: buildButtons(updatedProgress)
     });
 
     await interaction.followUp({
       content: `✅ Bestätigt: **${label}**\n📊 Fortschritt: **${completed}/${total}**`,
-      ephemeral: true
+      flags: 64
     });
 
     const logChannel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
@@ -322,7 +294,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: '❌ Beim Verarbeiten des Buttons ist ein Fehler aufgetreten.',
-        ephemeral: true
+        flags: 64
       });
     }
   }
